@@ -88,9 +88,18 @@ if uploaded_file is not None:
     # ========== Step 2: 요일 그룹핑 설정 ==========
     st.header("Step 2: 요일 그룹핑 설정")
 
-    st.markdown(
-        "각 그룹에 포함할 요일을 선택하세요. 회귀 분석 시 각 그룹이 독립변수로 사용됩니다."
-    )
+    col_header_left, col_header_right = st.columns([3, 1])
+    with col_header_left:
+        st.markdown(
+            "각 그룹에 포함할 요일을 선택하세요. 회귀 분석 시 각 그룹이 독립변수로 사용됩니다."
+        )
+    with col_header_right:
+        if st.button("그룹 추가", type="secondary", use_container_width=True):
+            new_group_num = len(st.session_state.day_groups) + 1
+            st.session_state.day_groups.append(
+                {"name": f"그룹 {new_group_num}", "days": []}
+            )
+            st.rerun()
 
     all_days = ["월", "화", "수", "목", "금", "토", "일"]
 
@@ -111,10 +120,21 @@ if uploaded_file is not None:
     new_selections = {idx: [] for idx in range(len(st.session_state.day_groups))}
     needs_rerun = False
 
+    # 그룹 삭제를 위한 플래그
+    group_to_delete = None
+
     for idx, col in enumerate(cols):
         with col:
             group = st.session_state.day_groups[idx]
-            st.subheader(group["name"])
+
+            # 그룹 헤더와 삭제 버튼
+            col_title, col_delete = st.columns([3, 1])
+            with col_title:
+                st.subheader(group["name"])
+            with col_delete:
+                if len(st.session_state.day_groups) > 1:
+                    if st.button("🗑️", key=f"delete_group_{idx}", help="그룹 삭제"):
+                        group_to_delete = idx
 
             for day in all_days:
                 # 다른 그룹에 속해있는지 체크
@@ -139,6 +159,11 @@ if uploaded_file is not None:
                 if checkbox:
                     new_selections[idx].append(day)
 
+    # 그룹 삭제 처리
+    if group_to_delete is not None:
+        st.session_state.day_groups.pop(group_to_delete)
+        st.rerun()
+
     # session_state 업데이트 및 변경 감지
     for idx in range(len(st.session_state.day_groups)):
         old_days = set(st.session_state.day_groups[idx]["days"])
@@ -155,21 +180,6 @@ if uploaded_file is not None:
         st.session_state.prev_day_groups = [g.copy() for g in st.session_state.day_groups]
         st.rerun()
 
-    # 그룹 추가/제거
-    col_a, col_b = st.columns([1, 1])
-    with col_a:
-        if st.button("그룹 추가"):
-            new_group_num = len(st.session_state.day_groups) + 1
-            st.session_state.day_groups.append(
-                {"name": f"그룹 {new_group_num}", "days": []}
-            )
-            st.rerun()
-
-    with col_b:
-        if st.button("마지막 그룹 제거") and len(st.session_state.day_groups) > 1:
-            st.session_state.day_groups.pop()
-            st.rerun()
-
     # 그룹핑 요약
     st.markdown("**현재 그룹핑:**")
     for group in st.session_state.day_groups:
@@ -179,8 +189,12 @@ if uploaded_file is not None:
     # 요일 → 그룹 매핑 생성 및 검증
     day_to_group = {}
     duplicate_days = []
+    empty_groups = []
 
     for idx, group in enumerate(st.session_state.day_groups):
+        if not group["days"]:
+            # 빈 그룹 발견
+            empty_groups.append(group["name"])
         for day in group["days"]:
             if day in day_to_group:
                 # 중복 발견
@@ -193,6 +207,10 @@ if uploaded_file is not None:
 
     # 에러 검증
     has_errors = False
+
+    if empty_groups:
+        st.error(f"[오류] **요일이 선택되지 않은 빈 그룹:** {', '.join(empty_groups)}")
+        has_errors = True
 
     if ungrouped_days:
         st.error(f"[오류] **그룹에 할당되지 않은 요일:** {', '.join(ungrouped_days)}")
