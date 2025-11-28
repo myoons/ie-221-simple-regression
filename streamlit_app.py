@@ -35,8 +35,7 @@ st.markdown("""
 if "day_groups" not in st.session_state:
     st.session_state.day_groups = [
         {"name": "그룹 1", "days": ["월", "수", "금"]},
-        {"name": "그룹 2", "days": ["화", "목", "토"]},
-        {"name": "그룹 3", "days": ["일"]},
+        {"name": "그룹 2", "days": ["화", "목", "토", "일"]},
     ]
 
 if "analysis_done" not in st.session_state:
@@ -67,7 +66,7 @@ with col2:
         )
 
 if uploaded_file is not None:
-    df_sim = pd.read_csv(uploaded_file)
+    df_sim = pd.read_csv(uploaded_file, encoding='utf-8-sig')
 
     # 데이터 검증
     required_cols = ["요일", "강수여부", "예약", "워크인"]
@@ -81,6 +80,12 @@ if uploaded_file is not None:
         st.dataframe(df_sim.head(20), use_container_width=True)
         st.write(f"**통계:**")
         st.write(df_sim.describe())
+
+    # 예약이 0인 행 필터링 (coef 계산 시 division by zero 방지)
+    zero_reservation_count = (df_sim["예약"] == 0).sum()
+    if zero_reservation_count > 0:
+        st.warning(f"[주의] 예약이 0인 행 {zero_reservation_count}개가 분석에서 제외됩니다.")
+        df_sim = df_sim[df_sim["예약"] > 0].reset_index(drop=True)
 
     # coef 계산
     df_sim["coef"] = df_sim["워크인"] / df_sim["예약"]
@@ -378,154 +383,177 @@ if uploaded_file is not None:
         metrics_real = st.session_state.metrics_real
         X_cols = st.session_state.X_cols
 
-        # ========== 1. 성능 지표 (강조) ==========
+        # ========== 1. 회귀 모델 (PPT 슬라이드 3) ==========
+        st.subheader("회귀 모델")
+
+        # 회귀식
+        coef_intercept = model.intercept_
+        coef_rain = model.coef_[0]
+        coef_daygroup = model.coef_[1] if len(model.coef_) > 1 else 0
+
+        st.markdown("### Model")
+        st.latex(f"coef = {coef_intercept:.4f} + ({coef_rain:.4f}) \\times Rain + ({coef_daygroup:.4f}) \\times DayGroup")
+
+        # Interpretation
+        col1, col2 = st.columns(2)
+
+        with col1:
+            st.markdown("### Interpretation")
+            st.markdown(f"""
+            - **Base ratio** (Mon/Wed/Fri, No Rain): **{coef_intercept*100:.1f}%**
+            - **Rain effect**: **{coef_rain*100:+.1f}%p**
+            - **Tue/Thu/Sat/Sun effect**: **{coef_daygroup*100:+.1f}%p**
+            """)
+
+        with col2:
+            st.markdown("### Coefficients Table")
+            var_names = ["Intercept", "Rain", "DayGroup"]
+            coef_df = pd.DataFrame({
+                "Variable": var_names[:len(st.session_state.coef_with_intercept)],
+                "Coef": st.session_state.coef_with_intercept,
+                "p-value": st.session_state.p_values,
+            })
+            st.dataframe(coef_df.round(4), use_container_width=True, hide_index=True)
+
+        st.divider()
+
+        # ========== 2. 성능 지표 ==========
         st.subheader("모델 성능 지표")
 
-        # 큰 메트릭 카드로 표시
-        st.markdown("### 시뮬레이션 데이터 (학습)")
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            st.metric(
-                label="RMSE",
-                value=f"{metrics_sim['RMSE']:.2f}",
-                help="Root Mean Squared Error: 예측 오차의 제곱근"
-            )
-        with col2:
-            st.metric(
-                label="NRMSE",
-                value=f"{metrics_sim['NRMSE']:.3f}",
-                help="Normalized RMSE: 평균 대비 상대적 오차"
-            )
-        with col3:
-            st.metric(
-                label="R² Score",
-                value=f"{metrics_sim['R²']:.3f}",
-                help="결정계수: 1에 가까울수록 좋음"
-            )
+        col1, col2 = st.columns(2)
 
-        st.markdown("### 실제 데이터 (테스트) - 최종 평가")
-        col1, col2, col3 = st.columns(3)
         with col1:
-            delta_rmse = metrics_real['RMSE'] - metrics_sim['RMSE']
-            st.metric(
-                label="RMSE",
-                value=f"{metrics_real['RMSE']:.2f}",
-                delta=f"{delta_rmse:+.2f}",
-                delta_color="inverse"
-            )
+            st.markdown("### 시뮬레이션 데이터 (학습)")
+            subcol1, subcol2, subcol3 = st.columns(3)
+            with subcol1:
+                st.metric(label="RMSE", value=f"{metrics_sim['RMSE']:.2f}")
+            with subcol2:
+                st.metric(label="NRMSE", value=f"{metrics_sim['NRMSE']:.1%}")
+            with subcol3:
+                st.metric(label="R²", value=f"{metrics_sim['R²']:.3f}")
+
         with col2:
-            delta_nrmse = metrics_real['NRMSE'] - metrics_sim['NRMSE']
-            st.metric(
-                label="NRMSE",
-                value=f"{metrics_real['NRMSE']:.3f}",
-                delta=f"{delta_nrmse:+.3f}",
-                delta_color="inverse"
-            )
-        with col3:
-            delta_r2 = metrics_real['R²'] - metrics_sim['R²']
-            st.metric(
-                label="R² Score",
-                value=f"{metrics_real['R²']:.3f}",
-                delta=f"{delta_r2:+.3f}",
-                delta_color="normal"
-            )
+            st.markdown("### 실제 데이터 (테스트)")
+            subcol1, subcol2, subcol3 = st.columns(3)
+            with subcol1:
+                st.metric(label="RMSE", value=f"{metrics_real['RMSE']:.2f}")
+            with subcol2:
+                st.metric(label="NRMSE", value=f"{metrics_real['NRMSE']:.1%}")
+            with subcol3:
+                st.metric(label="R²", value=f"{metrics_real['R²']:.3f}")
 
         st.divider()
 
-        # ========== 2. 회귀 계수 ==========
-        st.subheader("회귀 계수")
+        # ========== 3. 예측 결과 시각화 (PPT 슬라이드 4) ==========
+        st.subheader("예측 결과 시각화")
 
-        var_names = ["const"] + X_cols
+        # 요일 영어 변환
+        day_to_eng = {"월": "Mon", "화": "Tue", "수": "Wed", "목": "Thu", "금": "Fri", "토": "Sat", "일": "Sun"}
+        df_real["Day_eng"] = df_real["요일"].map(day_to_eng)
+        day_order_eng = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 
-        print("\n" + "="*60)
-        print("회귀 계수 테이블 생성")
-        print("="*60)
-        print(f"변수 이름: {var_names}")
-        print(f"X_cols: {X_cols}")
-        print(f"계수 개수: {len(st.session_state.coef_with_intercept)}")
-        print(f"변수 이름 개수: {len(var_names)}")
-
-        coef_df = pd.DataFrame(
-            {
-                "변수": var_names,
-                "계수": st.session_state.coef_with_intercept,
-                "표준오차": st.session_state.se_coef,
-                "t-value": st.session_state.t_values,
-                "p-value": st.session_state.p_values,
-            }
-        )
-        print("\n회귀 계수 테이블:")
-        print(coef_df)
-        print("="*60 + "\n")
-
-        st.dataframe(coef_df, use_container_width=True, height=250)
-
-        st.divider()
-
-        # ========== 3. 시뮬레이션 데이터 분석 ==========
-        st.subheader("시뮬레이션 데이터 분석")
-
-        col1, col2 = st.columns(2, gap="large")
+        # 3개 차트 (영어)
+        col1, col2, col3 = st.columns(3)
 
         with col1:
             # Actual vs Predicted
             fig, ax = plt.subplots(figsize=(5, 4))
-            ax.scatter(df_sim["워크인"], df_sim["pred_walkin"], alpha=0.6, s=20)
-            mn, mx = df_sim["워크인"].min(), df_sim["워크인"].max()
-            ax.plot([mn, mx], [mn, mx], "r--", label="Perfect", linewidth=1)
-            ax.set_xlabel("Actual", fontsize=9)
-            ax.set_ylabel("Predicted", fontsize=9)
-            ax.set_title("Actual vs Predicted", fontsize=10)
-            ax.legend(fontsize=8)
-            ax.tick_params(labelsize=8)
-            plt.tight_layout(pad=1.5)
+            ax.scatter(df_real["워크인"], df_real["pred_walkin"], s=80, alpha=0.7, color='#3498DB', edgecolor='white', linewidth=1)
+            mn, mx = min(df_real["워크인"].min(), df_real["pred_walkin"].min()), max(df_real["워크인"].max(), df_real["pred_walkin"].max())
+            ax.plot([mn, mx], [mn, mx], 'r--', linewidth=2, label='Perfect Prediction')
+            ax.set_xlabel('Actual Walk-in', fontsize=10)
+            ax.set_ylabel('Predicted Walk-in', fontsize=10)
+            ax.set_title('Actual vs Predicted', fontsize=12, fontweight='bold')
+            ax.legend(fontsize=9)
+            ax.spines['top'].set_visible(False)
+            ax.spines['right'].set_visible(False)
+            plt.tight_layout()
             st.pyplot(fig, use_container_width=True)
             plt.close(fig)
 
         with col2:
-            # 상관관계 히트맵
-            corr_cols = ["강수여부", "예약", "워크인", "coef"]
-            corr_matrix = df_sim[corr_cols].corr()
-
+            # Residuals
             fig, ax = plt.subplots(figsize=(5, 4))
-            sns.heatmap(corr_matrix, annot=True, cmap="coolwarm", fmt=".2f",
-                       ax=ax, cbar_kws={'shrink': 0.8}, annot_kws={'size': 8})
-            ax.set_title("상관관계 히트맵", fontsize=10)
-            ax.tick_params(labelsize=8)
-            plt.tight_layout(pad=1.5)
+            residuals_real = df_real["워크인"] - df_real["pred_walkin"]
+            colors = ['#E74C3C' if x < 0 else '#27AE60' for x in residuals_real]
+            ax.bar(range(len(residuals_real)), residuals_real, color=colors, alpha=0.7, edgecolor='white')
+            ax.axhline(0, color='black', linewidth=1)
+            ax.set_xlabel('Index', fontsize=10)
+            ax.set_ylabel('Residual', fontsize=10)
+            ax.set_title('Residuals', fontsize=12, fontweight='bold')
+            ax.spines['top'].set_visible(False)
+            ax.spines['right'].set_visible(False)
+            plt.tight_layout()
             st.pyplot(fig, use_container_width=True)
             plt.close(fig)
 
-        # Residuals (전체 너비)
-        df_sim["residual"] = df_sim["워크인"] - df_sim["pred_walkin"]
-        fig, ax = plt.subplots(figsize=(10, 3))
-        ax.bar(range(len(df_sim)), df_sim["residual"], alpha=0.7, width=1.0)
-        ax.axhline(0, color="black", linewidth=1)
-        ax.set_xlabel("Index", fontsize=9)
-        ax.set_ylabel("Residual", fontsize=9)
-        ax.set_title("시뮬레이션: Residuals", fontsize=10)
-        ax.tick_params(labelsize=8)
-        plt.tight_layout(pad=1.5)
-        st.pyplot(fig, use_container_width=True)
-        plt.close(fig)
+        with col3:
+            # Walk-in by Day
+            fig, ax = plt.subplots(figsize=(5, 4))
+            df_real["Day_order"] = pd.Categorical(df_real["Day_eng"], categories=day_order_eng, ordered=True)
+            day_summary = df_real.groupby("Day_order").agg({
+                "워크인": "mean",
+                "pred_walkin": "mean"
+            }).reset_index()
+
+            x = range(len(day_summary))
+            ax.plot(x, day_summary["워크인"], marker='o', linewidth=2, markersize=8, color='#3498DB', label='Actual')
+            ax.plot(x, day_summary["pred_walkin"], marker='s', linewidth=2, markersize=8, color='#E74C3C', label='Predicted')
+            ax.set_xticks(x)
+            ax.set_xticklabels(day_order_eng, fontsize=9)
+            ax.set_xlabel('Day of Week', fontsize=10)
+            ax.set_ylabel('Walk-in (avg)', fontsize=10)
+            ax.set_title('Walk-in by Day', fontsize=12, fontweight='bold')
+            ax.legend(fontsize=9)
+            ax.grid(True, alpha=0.3)
+            ax.spines['top'].set_visible(False)
+            ax.spines['right'].set_visible(False)
+            plt.tight_layout()
+            st.pyplot(fig, use_container_width=True)
+            plt.close(fig)
 
         st.divider()
 
-        # ========== 4. 실제 데이터 평가 ==========
-        st.subheader("실제 데이터 평가 (14개)")
+        # ========== 4. 조건별 예측 coef ==========
+        st.subheader("조건별 예측 워크인 비율")
+
+        pred_table = pd.DataFrame({
+            "Condition": [
+                "Mon/Wed/Fri + No Rain",
+                "Mon/Wed/Fri + Rain",
+                "Tue/Thu/Sat/Sun + No Rain",
+                "Tue/Thu/Sat/Sun + Rain"
+            ],
+            "Predicted coef": [
+                f"{coef_intercept:.3f} ({coef_intercept*100:.1f}%)",
+                f"{coef_intercept + coef_rain:.3f} ({(coef_intercept + coef_rain)*100:.1f}%)",
+                f"{coef_intercept + coef_daygroup:.3f} ({(coef_intercept + coef_daygroup)*100:.1f}%)",
+                f"{coef_intercept + coef_rain + coef_daygroup:.3f} ({(coef_intercept + coef_rain + coef_daygroup)*100:.1f}%)"
+            ]
+        })
+        st.dataframe(pred_table, use_container_width=True, hide_index=True)
+
+        st.divider()
+
+        # ========== 5. 실제 데이터 상세 ==========
+        st.subheader("실제 데이터 상세 (14개)")
 
         # 테이블
         display_cols = ["날짜", "요일", "강수여부", "예약", "워크인", "pred_walkin"]
         st.dataframe(
-            df_real[display_cols].round(2), use_container_width=True, height=550
+            df_real[display_cols].round(2), use_container_width=True, height=400
         )
 
-        # 요일 순서 정의
+        # 요일 순서 정의 (영어)
         day_order = ["월", "화", "수", "목", "금", "토", "일"]
 
         # 2024년과 2025년 데이터 분리
         df_24_eval = df_real[df_real["날짜"].astype(str).str.contains("2024")].copy()
         df_25_eval = df_real[df_real["날짜"].astype(str).str.contains("2025")].copy()
+
+        # 요일 영어 변환 추가
+        df_24_eval["Day_eng"] = df_24_eval["요일"].map(day_to_eng)
+        df_25_eval["Day_eng"] = df_25_eval["요일"].map(day_to_eng)
 
         # 요일을 Categorical로 변환하여 순서 보장
         df_24_eval["요일"] = pd.Categorical(df_24_eval["요일"], categories=day_order, ordered=True)
@@ -535,87 +563,58 @@ if uploaded_file is not None:
         df_24_eval = df_24_eval.sort_values("요일")
         df_25_eval = df_25_eval.sort_values("요일")
 
-        # Actual vs Predicted 산점도
-        col1, col2 = st.columns(2, gap="large")
-
-        with col1:
-            fig, ax = plt.subplots(figsize=(5, 4))
-            ax.scatter(df_real["워크인"], df_real["pred_walkin"], s=80, alpha=0.7)
-            mn, mx = df_real["워크인"].min(), df_real["워크인"].max()
-            ax.plot([mn, mx], [mn, mx], "r--", label="Perfect", linewidth=1)
-            ax.set_xlabel("Actual 워크인", fontsize=9)
-            ax.set_ylabel("Predicted 워크인", fontsize=9)
-            ax.set_title("Actual vs Predicted (전체)", fontsize=10)
-            ax.legend(fontsize=8)
-            ax.tick_params(labelsize=8)
-            plt.tight_layout(pad=1.5)
-            st.pyplot(fig, use_container_width=True)
-            plt.close(fig)
-
-        with col2:
-            # Residuals
-            df_real["residual"] = df_real["워크인"] - df_real["pred_walkin"]
-            fig, ax = plt.subplots(figsize=(5, 4))
-            colors = ["red" if x < 0 else "green" for x in df_real["residual"]]
-            ax.bar(range(len(df_real)), df_real["residual"], color=colors, alpha=0.7)
-            ax.axhline(0, color="black", linewidth=1)
-            ax.set_xlabel("Index", fontsize=9)
-            ax.set_ylabel("Residual", fontsize=9)
-            ax.set_title("Residuals (전체)", fontsize=10)
-            ax.tick_params(labelsize=8)
-            plt.tight_layout(pad=1.5)
-            st.pyplot(fig, use_container_width=True)
-            plt.close(fig)
-
         st.markdown("---")
-        st.markdown("**요일별 비교 (2024 vs 2025)**")
+        st.markdown("**연도별 비교 (2024 vs 2025)**")
 
-        # 요일별 선 그래프 (2024 vs 2025)
+        # 요일별 선 그래프 (2024 vs 2025) - 영어
         col1, col2 = st.columns(2, gap="large")
 
         with col1:
-            st.markdown("**2024년 요일별 추세**")
+            st.markdown("**2024**")
             fig, ax = plt.subplots(figsize=(5, 4))
             x_pos = range(len(df_24_eval))
             ax.plot(x_pos, df_24_eval["워크인"], marker="o", label="Actual",
-                   linewidth=1.5, markersize=6)
+                   linewidth=2, markersize=7, color='#3498DB')
             ax.plot(x_pos, df_24_eval["pred_walkin"], marker="s", label="Predicted",
-                   linewidth=1.5, markersize=6)
+                   linewidth=2, markersize=7, color='#E74C3C')
             ax.set_xticks(x_pos)
-            ax.set_xticklabels(df_24_eval["요일"], fontsize=8)
-            ax.set_ylabel("워크인", fontsize=9)
-            ax.set_title("2024년 요일별", fontsize=10)
-            ax.legend(fontsize=8)
+            ax.set_xticklabels(df_24_eval["Day_eng"], fontsize=9)
+            ax.set_ylabel("Walk-in", fontsize=10)
+            ax.set_xlabel("Day of Week", fontsize=10)
+            ax.set_title("2024 Walk-in by Day", fontsize=12, fontweight='bold')
+            ax.legend(fontsize=9)
             ax.grid(True, alpha=0.3)
-            ax.tick_params(labelsize=8)
-            plt.tight_layout(pad=1.5)
+            ax.spines['top'].set_visible(False)
+            ax.spines['right'].set_visible(False)
+            plt.tight_layout()
             st.pyplot(fig, use_container_width=True)
             plt.close(fig)
 
         with col2:
-            st.markdown("**2025년 요일별 추세**")
+            st.markdown("**2025**")
             fig, ax = plt.subplots(figsize=(5, 4))
             x_pos = range(len(df_25_eval))
             ax.plot(x_pos, df_25_eval["워크인"], marker="o", label="Actual",
-                   linewidth=1.5, markersize=6)
+                   linewidth=2, markersize=7, color='#3498DB')
             ax.plot(x_pos, df_25_eval["pred_walkin"], marker="s", label="Predicted",
-                   linewidth=1.5, markersize=6)
+                   linewidth=2, markersize=7, color='#E74C3C')
             ax.set_xticks(x_pos)
-            ax.set_xticklabels(df_25_eval["요일"], fontsize=8)
-            ax.set_ylabel("워크인", fontsize=9)
-            ax.set_title("2025년 요일별", fontsize=10)
-            ax.legend(fontsize=8)
+            ax.set_xticklabels(df_25_eval["Day_eng"], fontsize=9)
+            ax.set_ylabel("Walk-in", fontsize=10)
+            ax.set_xlabel("Day of Week", fontsize=10)
+            ax.set_title("2025 Walk-in by Day", fontsize=12, fontweight='bold')
+            ax.legend(fontsize=9)
             ax.grid(True, alpha=0.3)
-            ax.tick_params(labelsize=8)
-            plt.tight_layout(pad=1.5)
+            ax.spines['top'].set_visible(False)
+            ax.spines['right'].set_visible(False)
+            plt.tight_layout()
             st.pyplot(fig, use_container_width=True)
             plt.close(fig)
 
-        # 요일별 막대 그래프 (2024 vs 2025)
+        # 요일별 막대 그래프 (2024 vs 2025) - 영어
         col1, col2 = st.columns(2, gap="large")
 
         with col1:
-            st.markdown("**2024년 요일별 비교**")
             fig, ax = plt.subplots(figsize=(5, 4))
             x = range(len(df_24_eval))
             width = 0.35
@@ -624,25 +623,29 @@ if uploaded_file is not None:
                 df_24_eval["워크인"],
                 width,
                 label="Actual",
+                color='#3498DB',
+                alpha=0.8
             )
             ax.bar(
                 [i + width / 2 for i in x],
                 df_24_eval["pred_walkin"],
                 width,
                 label="Predicted",
+                color='#E74C3C',
+                alpha=0.8
             )
             ax.set_xticks(x)
-            ax.set_xticklabels(df_24_eval["요일"], fontsize=8)
-            ax.set_ylabel("워크인 수", fontsize=9)
-            ax.set_title("2024년 막대 비교", fontsize=10)
-            ax.legend(fontsize=8)
-            ax.tick_params(labelsize=8)
-            plt.tight_layout(pad=1.5)
+            ax.set_xticklabels(df_24_eval["Day_eng"], fontsize=9)
+            ax.set_ylabel("Walk-in", fontsize=10)
+            ax.set_title("2024 Comparison", fontsize=12, fontweight='bold')
+            ax.legend(fontsize=9)
+            ax.spines['top'].set_visible(False)
+            ax.spines['right'].set_visible(False)
+            plt.tight_layout()
             st.pyplot(fig, use_container_width=True)
             plt.close(fig)
 
         with col2:
-            st.markdown("**2025년 요일별 비교**")
             fig, ax = plt.subplots(figsize=(5, 4))
             x = range(len(df_25_eval))
             width = 0.35
@@ -651,17 +654,21 @@ if uploaded_file is not None:
                 df_25_eval["워크인"],
                 width,
                 label="Actual",
+                color='#3498DB',
+                alpha=0.8
             )
             ax.bar(
                 [i + width / 2 for i in x],
                 df_25_eval["pred_walkin"],
                 width,
                 label="Predicted",
+                color='#E74C3C',
+                alpha=0.8
             )
             ax.set_xticks(x)
-            ax.set_xticklabels(df_25_eval["요일"], fontsize=8)
-            ax.set_ylabel("워크인 수", fontsize=9)
-            ax.set_title("2025년 막대 비교", fontsize=10)
+            ax.set_xticklabels(df_25_eval["Day_eng"], fontsize=9)
+            ax.set_ylabel("Walk-in", fontsize=10)
+            ax.set_title("2025 Comparison", fontsize=12, fontweight='bold')
             ax.legend(fontsize=8)
             ax.tick_params(labelsize=8)
             plt.tight_layout(pad=1.5)
